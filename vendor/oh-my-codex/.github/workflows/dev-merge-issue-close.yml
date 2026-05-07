@@ -1,0 +1,88 @@
+name: Dev Merge Issue Close
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  issues: write
+  pull-requests: read
+
+jobs:
+  close-linked-issues:
+    name: Close explicitly linked issues after dev merge
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'dev'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.ref }}
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const {
+              buildMaintainerCloseComment,
+              collectLinkedLocalIssueNumbers,
+            } = require('./.github/scripts/dev-merge-issue-close.cjs');
+
+            const pullRequest = context.payload.pull_request;
+            const issueNumbers = collectLinkedLocalIssueNumbers({
+              title: pullRequest.title,
+              body: pullRequest.body,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+
+            if (issueNumbers.length === 0) {
+              core.notice('No explicitly linked local issues found in merged PR title/body.');
+              return;
+            }
+
+            const closeComment = buildMaintainerCloseComment({ prNumber: pullRequest.number });
+            const closedIssueNumbers = [];
+
+            for (const issueNumber of issueNumbers) {
+              try {
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                });
+
+                if (issue.pull_request) {
+                  core.info(`Skipping #${issueNumber} because it is a pull request, not an issue.`);
+                  continue;
+                }
+
+                if (issue.state !== 'open') {
+                  core.info(`Skipping #${issueNumber} because it is already ${issue.state}.`);
+                  continue;
+                }
+
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  body: closeComment,
+                });
+
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  state: 'closed',
+                });
+
+                closedIssueNumbers.push(issueNumber);
+              } catch (error) {
+                core.warning(`Failed to close issue #${issueNumber}: ${error.message}`);
+              }
+            }
+
+            if (closedIssueNumbers.length === 0) {
+              core.notice('No open issues required closing.');
+              return;
+            }
+
+            core.notice(`Closed linked issues after merge to dev: ${closedIssueNumbers.map((issueNumber) => `#${issueNumber}`).join(', ')}`);

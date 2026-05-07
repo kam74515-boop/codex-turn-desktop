@@ -1,0 +1,23 @@
+[package]
+name = "codex-turn"
+version = "0.1.4"
+description = "Codex Turn desktop app"
+authors = ["kam74515-boop <kam74515@gmail.com>"]
+license = "MIT"
+edition = "2021"
+
+[lib]
+name = "codex_turn_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+toml_edit = "0.23"
+dirs = "6"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+ureq = { version = "3", default-features = true }

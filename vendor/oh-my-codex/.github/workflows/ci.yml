@@ -1,0 +1,329 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev, experimental/dev]
+  pull_request:
+    branches: [main, dev, experimental/dev]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rustfmt:
+    name: Rust Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Check Rust formatting
+        run: cargo fmt --all --check
+
+  clippy:
+    name: Rust Clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: clippy
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  rust-tests:
+    name: Rust Tests + Coverage Signal
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+          components: llvm-tools-preview
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run Rust tests with coverage summaries
+        shell: bash
+        run: |
+          mkdir -p coverage/rust
+
+          cargo llvm-cov --workspace --summary-only | tee coverage/rust/workspace-summary.txt
+          cargo llvm-cov --manifest-path crates/omx-sparkshell/Cargo.toml --summary-only | tee coverage/rust/omx-sparkshell-summary.txt
+      - name: Add Rust coverage summary to job summary
+        shell: bash
+        run: |
+          {
+            echo '## Rust Test Coverage Summary'
+            echo ''
+            echo '### Workspace'
+            echo '```text'
+            cat coverage/rust/workspace-summary.txt
+            echo '```'
+            echo ''
+            echo '### omx-sparkshell manifest'
+            echo '```text'
+            cat coverage/rust/omx-sparkshell-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm run check:no-unused
+
+  build-dist:
+    name: Build dist artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Upload prebuilt dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-dist-node20
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    name: Test (Node ${{ matrix.node-version }} / ${{ matrix.lane }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    needs: [build-dist]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node-version: 20
+            lane: team-state-runtime
+            test-roots: >-
+              dist/team/__tests__
+              dist/state/__tests__
+              dist/ralph/__tests__
+              dist/ralplan/__tests__
+              dist/runtime/__tests__
+            catalog-check: false
+          - node-version: 20
+            lane: hooks-notify-platform
+            test-roots: >-
+              dist/hooks/__tests__
+              dist/hooks/code-simplifier/__tests__
+              dist/hooks/extensibility/__tests__
+              dist/notifications/__tests__
+              dist/mcp/__tests__
+              dist/hud/__tests__
+              dist/verification/__tests__
+              dist/openclaw/__tests__
+            catalog-check: false
+          - node-version: 20
+            lane: cli-core-rest
+            test-roots: >-
+              dist/cli/__tests__
+              dist/agents/__tests__
+              dist/autoresearch/__tests__
+              dist/catalog/__tests__
+              dist/compat/__tests__
+              dist/config/__tests__
+              dist/modes/__tests__
+              dist/pipeline/__tests__
+              dist/planning/__tests__
+              dist/scripts/__tests__
+              dist/session-history/__tests__
+              dist/subagents/__tests__
+              dist/utils/__tests__
+              dist/visual/__tests__
+            catalog-check: true
+          - node-version: 22
+            lane: smoke
+            catalog-check: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      - name: Download prebuilt dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-dist-node20
+          path: dist
+      - name: Run grouped full-suite lane
+        if: matrix.lane != 'smoke'
+        run: |
+          node dist/scripts/run-test-files.js ${{ matrix.test-roots }}
+      - name: Verify generated catalog docs
+        if: matrix.catalog-check == true
+        run: node dist/scripts/generate-catalog-docs.js --check
+      - name: Run cross-rebase smoke command
+        if: matrix.lane == 'smoke'
+        run: npm run test:team:cross-rebase-smoke:compiled
+      - name: Run remaining smoke suite
+        if: matrix.lane == 'smoke'
+        run: |
+          node --test \
+            dist/cli/__tests__/packaged-script-resolution.test.js \
+            dist/cli/__tests__/package-bin-contract.test.js \
+            dist/cli/__tests__/explore.test.js \
+            dist/cli/__tests__/sparkshell-cli.test.js \
+            dist/hooks/__tests__/explore-routing.test.js \
+            dist/hooks/__tests__/explore-sparkshell-guidance-contract.test.js \
+            dist/scripts/__tests__/smoke-packed-install.test.js \
+            dist/verification/__tests__/explore-harness-release-workflow.test.js \
+            dist/compat/__tests__/*.test.js
+
+  coverage-team-critical:
+    name: Coverage Gate (Team Critical)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [typecheck, build-dist]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Download prebuilt dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-dist-node20
+          path: dist
+      - name: Run team/state coverage gate
+        run: npm run coverage:team-critical:compiled
+      - name: Add coverage summary to job summary
+        run: |
+          node -e '
+            const fs = require("node:fs");
+            const summary = JSON.parse(fs.readFileSync("coverage/team/coverage-summary.json", "utf8"));
+            const total = summary.total;
+            const lines = [
+              "## Team/State Coverage Summary",
+              "",
+              "| Metric | Pct | Covered / Total |",
+              "|---|---:|---:|",
+              `| Lines | ${total.lines.pct}% | ${total.lines.covered} / ${total.lines.total} |`,
+              `| Functions | ${total.functions.pct}% | ${total.functions.covered} / ${total.functions.total} |`,
+              `| Branches | ${total.branches.pct}% | ${total.branches.covered} / ${total.branches.total} |`,
+              `| Statements | ${total.statements.pct}% | ${total.statements.covered} / ${total.statements.total} |`
+            ];
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${lines.join("\n")}\n`);
+          '
+      - name: Upload team coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: team-critical-coverage
+          path: coverage/team/
+
+  ralph-persistence-gate:
+    name: Ralph Persistence Gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [typecheck, build-dist]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Download prebuilt dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-dist-node20
+          path: dist
+      - name: Run Ralph persistence verification matrix
+        run: npm run test:ralph-persistence:compiled
+
+  build:
+    name: Build (Full Source Build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: [rustfmt, clippy, lint, typecheck, build-dist]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: stable
+      - run: npm ci
+      - name: Download prebuilt dist artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: ci-dist-node20
+          path: dist
+      - run: npm run build:explore:release
+      - run: npm run build:sparkshell
+
+  ci-status:
+    name: CI Status
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [rustfmt, clippy, rust-tests, lint, typecheck, test, coverage-team-critical, ralph-persistence-gate, build]
+    steps:
+      - name: Check required job results
+        run: |
+          if [[ "${{ needs.rustfmt.result }}" != "success" ]] ||
+             [[ "${{ needs.clippy.result }}" != "success" ]] ||
+             [[ "${{ needs.rust-tests.result }}" != "success" ]] ||
+             [[ "${{ needs.lint.result }}" != "success" ]] ||
+             [[ "${{ needs.typecheck.result }}" != "success" ]] ||
+             [[ "${{ needs.test.result }}" != "success" ]] ||
+             [[ "${{ needs.coverage-team-critical.result }}" != "success" ]] ||
+             [[ "${{ needs.ralph-persistence-gate.result }}" != "success" ]] ||
+             [[ "${{ needs.build.result }}" != "success" ]]; then
+            echo "::error::One or more required CI jobs failed"
+            echo "  rustfmt: ${{ needs.rustfmt.result }}"
+            echo "  clippy: ${{ needs.clippy.result }}"
+            echo "  rust-tests: ${{ needs.rust-tests.result }}"
+            echo "  lint: ${{ needs.lint.result }}"
+            echo "  typecheck: ${{ needs.typecheck.result }}"
+            echo "  test: ${{ needs.test.result }}"
+            echo "  coverage-team-critical: ${{ needs.coverage-team-critical.result }}"
+            echo "  ralph-persistence-gate: ${{ needs.ralph-persistence-gate.result }}"
+            echo "  build: ${{ needs.build.result }}"
+            exit 1
+          fi
+          echo "All required CI checks passed"

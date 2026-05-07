@@ -1,0 +1,1 @@
+3) If correctness depends on repository inspection, prompt review, official docs, or other evidence, keep using those sources until the plan is grounded; stop once the requirements, affected resources, validation commands, failure behavior, and material open questions are traceable.

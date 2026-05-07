@@ -1,0 +1,13 @@
+{
+  "name": "@codex-turn/omx-bridge",
+  "version": "0.1.4",
+  "private": true,
+  "license": "MIT",
+  "author": "kam74515-boop <kam74515@gmail.com>",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "omx": "node dist/src/cli.js"
+  }
+}

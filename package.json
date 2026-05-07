@@ -1,0 +1,29 @@
+{
+  "name": "codex-turn",
+  "version": "0.1.4",
+  "private": true,
+  "license": "MIT",
+  "author": "kam74515-boop <kam74515@gmail.com>",
+  "type": "module",
+  "workspaces": [
+    "apps/desktop",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "ci": "npm run build && npm run test && cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml",
+    "dev:converter": "npm --workspace @codex-turn/converter run dev --",
+    "dev:desktop": "npm --workspace @codex-turn/desktop run tauri:dev",
+    "clean": "rm -rf node_modules packages/*/node_modules apps/*/node_modules packages/*/dist apps/*/dist"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.0",
+    "typescript": "^6.0.3"
+  }
+}
